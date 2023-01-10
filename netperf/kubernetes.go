@@ -109,6 +109,31 @@ func CreateDeployment(dp DeploymentParams, client *kubernetes.Clientset) (*appsv
 	return dc.Create(context.TODO(), deployment, metav1.CreateOptions{})
 }
 
+func GetPodNodeIP(c *kubernetes.Clientset, dp DeploymentParams) (string, error) {
+	ip := ""
+	d, err := c.AppsV1().Deployments(dp.Namespace).Get(context.TODO(), dp.Name, metav1.GetOptions{})
+	if err != nil {
+		return ip, fmt.Errorf("❌ Failure to capture deployment")
+	}
+	selector, err := metav1.LabelSelectorAsSelector(d.Spec.Selector)
+	if err != nil {
+		return ip, fmt.Errorf("❌ Failure to capture deployment label")
+	}
+	pods, err := c.CoreV1().Pods(dp.Namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: selector.String(), FieldSelector: "status.phase=Running"})
+	if err != nil {
+		return ip, fmt.Errorf("❌ Failure to capture pods")
+	}
+	for pod := range pods.Items {
+		p := pods.Items[pod]
+		if pods.Items[pod].DeletionTimestamp != nil {
+			continue
+		} else {
+			ip = p.Status.HostIP
+		}
+	}
+	return ip, nil
+}
+
 // GetPods searches for a specific set of pods from DeploymentParms
 // It returns a PodList if the deployment is found.
 // NOTE : Since we can update the replicas to be > 1, is why I return a PodList.

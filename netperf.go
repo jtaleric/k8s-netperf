@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	log "gihub.com/jtaleric/k8s-netperf/logging"
+	"gihub.com/jtaleric/k8s-netperf/metrics"
+	prom "gihub.com/jtaleric/k8s-netperf/metrics"
 	"gihub.com/jtaleric/k8s-netperf/netperf"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -20,11 +23,22 @@ func main() {
 	nl := flag.Bool("local", false, "Run Netperf with pod/server on the same node")
 	full := flag.Bool("all", false, "Run all tests scenarios - hostNet and podNetwork (if possible)")
 	debug := flag.Bool("debug", false, "Enable debug log")
+	promURL := flag.String("prom", "", "Prometheus URL")
+	showMetrics := flag.Bool("metrics", false, "Show all system metrics retrieved from prom")
 	tcpt := flag.Float64("tcp-tolerance", 10, "Allowed %diff from hostNetwork to podNetwork, anything above tolerance will result in k8s-netperf exiting 1.")
 	flag.Parse()
 
 	if *debug {
 		log.SetDebug()
+	}
+
+	if len(*promURL) > 1 {
+		if prom.PromCheck(*promURL) {
+			log.Info("📒 Prometheus can be reached, collecting system metrics")
+		} else {
+			log.Error("Unable to reach provided prometheus URL")
+			os.Exit(1)
+		}
 	}
 
 	cfg, err := netperf.ParseConf(*cfgfile)
@@ -98,6 +112,7 @@ func main() {
 			npr.Service = service
 			npr.HostNetwork = true
 			if !nc.Service && *full {
+				npr.StartTime = time.Now()
 				for i := 0; i < nc.Samples; i++ {
 					r, err := netperf.Run(client, s.RestConfig, nc, s.ClientHost, s.ServerHost.Items[0].Status.PodIP)
 					if err != nil {
@@ -113,6 +128,7 @@ func main() {
 					npr.ThroughputSummary = append(npr.ThroughputSummary, nr.Throughput)
 					npr.LatencySummary = append(npr.LatencySummary, nr.Latency99ptile)
 				}
+				npr.EndTime = time.Now()
 				sr.Results = append(sr.Results, npr)
 			}
 			npr = netperf.Data{}
@@ -120,6 +136,7 @@ func main() {
 			npr.Metric = metric
 			npr.Service = service
 			npr.SameNode = false
+			npr.StartTime = time.Now()
 			for i := 0; i < nc.Samples; i++ {
 				r, err := netperf.Run(client, s.RestConfig, nc, s.ClientAcross, serverIP)
 				if err != nil {
@@ -134,6 +151,15 @@ func main() {
 				npr.ThroughputSummary = append(npr.ThroughputSummary, nr.Throughput)
 				npr.LatencySummary = append(npr.LatencySummary, nr.Latency99ptile)
 			}
+			npr.EndTime = time.Now()
+			if len(*promURL) > 1 {
+				log.Infof("Querying Promethtues for NodeCPU Data for instance %s - For Start: %s For End: %s", s.ClientNodeIP, npr.StartTime, npr.EndTime)
+				npr.ClientMetrics, _ = metrics.QueryNodeCPU(s.ClientNodeIP, *promURL, npr.StartTime, npr.EndTime)
+				log.Infof("Querying Promethtues for NodeCPU Data for instance %s - For Start: %s For End: %s", s.ServerNodeIP, npr.StartTime, npr.EndTime)
+				npr.ServerMetrics, _ = metrics.QueryNodeCPU(s.ServerNodeIP, *promURL, npr.StartTime, npr.EndTime)
+				npr.ClientPodCPU, _ = metrics.TopPodCPU(s.ClientNodeIP, *promURL, npr.StartTime, npr.EndTime)
+				npr.ServerPodCPU, _ = metrics.TopPodCPU(s.ServerNodeIP, *promURL, npr.StartTime, npr.EndTime)
+			}
 			sr.Results = append(sr.Results, npr)
 		} else {
 			// Reset the result as we are now testing a different scenario
@@ -143,6 +169,7 @@ func main() {
 			npr.Metric = metric
 			npr.Service = service
 			npr.SameNode = true
+			npr.StartTime = time.Now()
 			for i := 0; i < nc.Samples; i++ {
 				r, err := netperf.Run(client, s.RestConfig, nc, s.Client, serverIP)
 				if err != nil {
@@ -157,12 +184,25 @@ func main() {
 				npr.ThroughputSummary = append(npr.ThroughputSummary, nr.Throughput)
 				npr.LatencySummary = append(npr.LatencySummary, nr.Latency99ptile)
 			}
+			npr.EndTime = time.Now()
+			if len(*promURL) > 1 {
+				log.Infof("Querying Promethtues for NodeCPU Data for instance %s - For Start: %s For End: %s", s.ClientNodeIP, npr.StartTime, npr.EndTime)
+				npr.ClientMetrics, _ = metrics.QueryNodeCPU(s.ClientNodeIP, "http://localhost:9090", npr.StartTime, npr.EndTime)
+				log.Infof("Querying Promethtues for NodeCPU Data for instance %s - For Start: %s For End: %s", s.ServerNodeIP, npr.StartTime, npr.EndTime)
+				npr.ServerMetrics, _ = metrics.QueryNodeCPU(s.ServerNodeIP, "http://localhost:9090", npr.StartTime, npr.EndTime)
+				npr.ClientPodCPU, _ = metrics.TopPodCPU(s.ClientNodeIP, "http://localhost:9090", npr.StartTime, npr.EndTime)
+				npr.ServerPodCPU, _ = metrics.TopPodCPU(s.ServerNodeIP, "http://localhost:9090", npr.StartTime, npr.EndTime)
+			}
 			sr.Results = append(sr.Results, npr)
 		}
 	}
 	netperf.ShowStreamResult(sr)
 	netperf.ShowRRResult(sr)
 	netperf.ShowLatencyResult(sr)
+	if *showMetrics {
+		netperf.ShowNodeCPU(sr)
+		netperf.ShowPodCPU(sr)
+	}
 	err = netperf.WriteCSVResult(sr)
 	if err != nil {
 		log.Error(err)

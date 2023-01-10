@@ -56,6 +56,8 @@ type PerfScenarios struct {
 	NodeLocal    bool
 	HostNetwork  bool
 	Configs      []Config
+	ServerNodeIP string
+	ClientNodeIP string
 	Client       apiv1.PodList
 	Server       apiv1.PodList
 	ClientAcross apiv1.PodList
@@ -138,7 +140,7 @@ func BuildSUT(client *kubernetes.Clientset, s *PerfScenarios) error {
 		if err != nil {
 			return err
 		}
-
+		s.ClientNodeIP, _ = GetPodNodeIP(client, cdp)
 	}
 
 	// Create netperf TCP service
@@ -275,6 +277,11 @@ func BuildSUT(client *kubernetes.Clientset, s *PerfScenarios) error {
 		}
 	}
 	s.Server, err = deployDeployment(client, sdp)
+
+	s.ServerNodeIP, _ = GetPodNodeIP(client, sdp)
+	if !s.NodeLocal {
+		s.ClientNodeIP, _ = GetPodNodeIP(client, cdpAcross)
+	}
 	if err != nil {
 		return err
 	}
