@@ -3,7 +3,9 @@ package netperf
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"gihub.com/jtaleric/k8s-netperf/metrics"
 	stats "github.com/montanaflynn/stats"
 )
 
@@ -14,9 +16,15 @@ type Data struct {
 	SameNode          bool
 	HostNetwork       bool
 	Sample            Sample
+	StartTime         time.Time
+	EndTime           time.Time
 	Service           bool
 	ThroughputSummary []float64
 	LatencySummary    []float64
+	ClientMetrics     metrics.NodeCPU
+	ServerMetrics     metrics.NodeCPU
+	ClientPodCPU      metrics.PodValues
+	ServerPodCPU      metrics.PodValues
 }
 
 // ScenarioResults each scenario could have multiple results
@@ -84,6 +92,35 @@ func calDiff(a float64, b float64) float64 {
 	return (a - b) / ((a + b) / 2) * 100
 }
 
+func ShowPodCPU(s ScenarioResults) {
+	fmt.Printf("%s Pod CPU Utilization %s\r\n", strings.Repeat("-", 73), strings.Repeat("-", 73))
+	fmt.Printf("%-18s | %-15s | %-15s | %-15s | %-15s | %-15s | %-25s | %-15s \r\n", "Role", "Scenario", "Host Network", "Service", "Message Size", "Same node", "Pod", "Utilization")
+	fmt.Printf("%s\r\n", strings.Repeat("-", 166))
+	for _, r := range s.Results {
+		for _, pod := range r.ClientPodCPU.Results {
+			fmt.Printf("📊 %-15s | %-15s | %-15t | %-15t | %-15d | %-15t | %-25s | %-15f \r\n", "Client", r.Profile, r.HostNetwork, r.Service, r.MessageSize, r.SameNode, fmt.Sprintf("%.20s", pod.Name), pod.Value)
+		}
+		fmt.Printf("%s\r\n", strings.Repeat("-", 166))
+		for _, pod := range r.ServerPodCPU.Results {
+			fmt.Printf("📊 %-15s | %-15s | %-15t | %-15t | %-15d | %-15t | %-25s | %-15f \r\n", "Server", r.Profile, r.HostNetwork, r.Service, r.MessageSize, r.SameNode, fmt.Sprintf("%.20s", pod.Name), pod.Value)
+		}
+		fmt.Printf("%s\r\n", strings.Repeat("-", 166))
+	}
+}
+
+func ShowNodeCPU(s ScenarioResults) {
+	fmt.Printf("%s Node CPU Utilization %s\r\n", strings.Repeat("-", 111), strings.Repeat("-", 111))
+	fmt.Printf("%-18s | %-15s | %-15s | %-15s | %-15s | %-15s | %-15s | %-15s | %-15s | %-15s | %-15s | %-15s | %-15s | %-15s\r\n", "Role", "Scenario", "Host Network", "Service", "Message Size", "Same node", "Idle CPU", "User CPU", "System CPU", "Steal CPU", "IOWait CPU", "Nice CPU", "SoftIRQ CPU", "IRQ CPU")
+	fmt.Printf("%s\r\n", strings.Repeat("-", 245))
+	for _, r := range s.Results {
+		ccpu := r.ClientMetrics
+		scpu := r.ServerMetrics
+		fmt.Printf("📊 %-15s | %-15s | %-15t | %-15t | %-15d | %-15t | %-15f | %-15f | %-15f | %-15f | %-15f | %-15f | %-15f | %-15f\r\n", "Client", r.Profile, r.HostNetwork, r.Service, r.MessageSize, r.SameNode, ccpu.Idle, ccpu.User, ccpu.System, ccpu.Steal, ccpu.Iowait, ccpu.Nice, ccpu.Softirq, ccpu.Irq)
+		fmt.Printf("📊 %-15s | %-15s | %-15t | %-15t | %-15d | %-15t | %-15f | %-15f | %-15f | %-15f | %-15f | %-15f | %-15f | %-15f\r\n", "Server", r.Profile, r.HostNetwork, r.Service, r.MessageSize, r.SameNode, scpu.Idle, scpu.User, scpu.System, scpu.Steal, ccpu.Iowait, ccpu.Nice, ccpu.Softirq, ccpu.Irq)
+	}
+	fmt.Printf("%s\r\n", strings.Repeat("-", 245))
+}
+
 // ShowStreamResult accepts NetPerfResults to display to the user via stdout
 func ShowStreamResult(s ScenarioResults) {
 	if checkResults(s, "STREAM") {
@@ -97,6 +134,7 @@ func ShowStreamResult(s ScenarioResults) {
 			}
 		}
 		fmt.Printf("%s\r\n", strings.Repeat("-", 155))
+
 	}
 }
 
