@@ -95,6 +95,23 @@ Flags:
 
 > *Note: With OpenShift, we attempt to discover the OpenShift route. If that route is not reachable, it might be required to `port-forward` the service and pass that via the `--prom` option.*
 
+## Running in a Container
+
+You can also run `k8s-netperf` in a container. Here is an example command on how to execute it:
+
+```shell
+$ podman run -v ~/.kube/config:/root/.kube/config -v $(pwd)/netperf.yml:/netperf.yml quay.io/cloud-bulldozer/k8s-netperf:latest k8s-netperf --config /netperf.yml
+```
+
+This command does the following:
+
+* ```-v ~/.kube/config:/root/.kube/config```: Mounts your local kubeconfig into the container at /root/.kube/config. This allows k8s-netperf to interact with your Kubernetes cluster.
+* ```-v $(pwd)/netperf.yml:/netperf.yml```: Mounts your local netperf.yml configuration file into the container at /netperf.yml.
+* ```quay.io/cloud-bulldozer/k8s-netperf:latest```: Specifies the container image to run. In this case, it's the latest version of k8s-netperf from quay.io.
+* ```k8s-netperf --config /netperf.yml```: The command to run inside the container. This starts k8s-netperf with your configuration file.
+
+Please replace `~/.kube/config` and `$(pwd)/netperf.yml` with the paths to your kubeconfig and `netperf.yml` files, respectively.
+
 ### Config file
 #### Config File v2
 The v2 config file will be executed in the order the tests are presented in the config file.

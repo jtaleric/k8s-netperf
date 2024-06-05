@@ -1,10 +1,29 @@
 # RHEL_VERSION defined in Makefile
+FROM golang:1.19 AS builder
+# smoke test to verify if golang is available
+RUN go version
+
+ARG PROJECT_VERSION=latest
+
+COPY . /go/src/github.com/jtaleric/k8s-netperf/
+WORKDIR /go/src/github.com/jtaleric/k8s-netperf/
+RUN set -Eeux && \
+    go mod download && \
+    go mod verify
+
+RUN GOOS=linux GOARCH=amd64 \
+    go build \
+    -trimpath \
+    -ldflags="-w -s -X 'main.Version=${PROJECT_VERSION}'" \
+    -o ./k8s-netperf cmd/k8s-netperf/k8s-netperf.go
+RUN go test -cover -v ./...
+
 ARG RHEL_VERSION
 FROM registry.access.redhat.com/${RHEL_VERSION}:latest
 
-COPY appstream.repo /etc/yum.repos.d/centos8-appstream.repo
+COPY ./containers/appstream.repo /etc/yum.repos.d/centos8-appstream.repo
 
-COPY netperf.diff /tmp/netperf.diff
+COPY ./containers/netperf.diff /tmp/netperf.diff
 RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm && dnf clean all
 RUN dnf install -y uperf && dnf clean all
 
@@ -31,4 +50,6 @@ RUN curl -L https://github.com/esnet/iperf/releases/download/3.16/iperf-3.16.tar
 
 RUN rm -rf netperf && \
     dnf clean all
-COPY super-netperf /usr/bin/super-netperf
+COPY ./containers/super-netperf /usr/bin/super-netperf
+
+COPY --from=builder /go/src/github.com/jtaleric/k8s-netperf/k8s-netperf /usr/bin/k8s-netperf
