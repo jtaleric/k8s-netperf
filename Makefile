@@ -38,7 +38,7 @@ container-build: build
 	@echo "Building the container image"
 	$(CONTAINER_BUILD) -f containers/Containerfile \
 		--build-arg RHEL_VERSION=$(RHEL_VERSION) \
-		-t $(CONTAINER_NS)/$(BIN):latest ./containers
+		-t $(CONTAINER_NS)/$(BIN):latest .
 
 gha-build:
 	@echo "Building the container image for GHA"
