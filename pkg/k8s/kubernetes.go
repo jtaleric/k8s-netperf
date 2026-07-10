@@ -137,6 +137,34 @@ func ValidateBridgeNetwork(client *kubernetes.Clientset, dyn dynamic.Interface, 
 	return nil
 }
 
+// ValidateCudnNetwork validates that the specified C-UDN namespace and NetworkAttachmentDefinition exist
+func ValidateCudnNetwork(client *kubernetes.Clientset, dyn dynamic.Interface, cudnNetwork, cudnNamespace string) error {
+	if cudnNetwork == "" {
+		return nil
+	}
+
+	// Check if the namespace exists
+	_, err := client.CoreV1().Namespaces().Get(context.TODO(), cudnNamespace, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("C-UDN namespace '%s' does not exist: %v", cudnNamespace, err)
+	}
+
+	// Check if the NetworkAttachmentDefinition exists in the specified namespace
+	gvr := schema.GroupVersionResource{
+		Group:    "k8s.cni.cncf.io",
+		Version:  "v1",
+		Resource: "network-attachment-definitions",
+	}
+
+	_, err = dyn.Resource(gvr).Namespace(cudnNamespace).Get(context.TODO(), cudnNetwork, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("C-UDN NetworkAttachmentDefinition '%s' does not exist in namespace '%s': %v", cudnNetwork, cudnNamespace, err)
+	}
+
+	log.Infof("✅ C-UDN Localnet network validation passed: %s/%s", cudnNamespace, cudnNetwork)
+	return nil
+}
+
 // buildBridgeNetworkAnnotations creates the network annotations for Multus CNI bridge networks
 func buildBridgeNetworkAnnotations(bridgeNetwork, bridgeNamespace string) map[string]string {
 	annotations := make(map[string]string)
@@ -149,11 +177,12 @@ func buildBridgeNetworkAnnotations(bridgeNetwork, bridgeNamespace string) map[st
 }
 
 // buildCUdnNetworkAnnotations creates the network annotations for Multus CNI CUdn networks
-func buildCUdnNetworkAnnotations(cudn string) map[string]string {
+func buildCUdnNetworkAnnotations(cudnNetwork, cudnNamespace string) map[string]string {
 	annotations := make(map[string]string)
-	if cudn != "" {
-		annotations["k8s.v1.cni.cncf.io/networks"] = namespace + "/" + cudn
-		log.Infof("🌉 Configuring CUdn network: %s", namespace+"/"+cudn)
+	if cudnNetwork != "" && cudnNamespace != "" {
+		networkRef := fmt.Sprintf("%s/%s", cudnNamespace, cudnNetwork)
+		annotations["k8s.v1.cni.cncf.io/networks"] = networkRef
+		log.Infof("🌉 Configuring CUdn network: %s", networkRef)
 	}
 	return annotations
 }
@@ -639,7 +668,7 @@ func BuildSUT(client *kubernetes.Clientset, s *config.PerfScenarios) error {
 		if s.BridgeNetwork != "" {
 			networkAnnotations = buildBridgeNetworkAnnotations(s.BridgeNetwork, s.BridgeNamespace)
 		} else if s.Cudn {
-			networkAnnotations = buildCUdnNetworkAnnotations(CudnName)
+			networkAnnotations = buildCUdnNetworkAnnotations(s.CudnNetworkName, s.CudnNetworkNamespace)
 		} else if s.SriovNetwork != "" {
 			networkAnnotations = buildSriovNetworkAnnotations()
 		} else if s.MacvlanNetwork != "" {
@@ -728,7 +757,7 @@ func BuildSUT(client *kubernetes.Clientset, s *config.PerfScenarios) error {
 		if s.BridgeNetwork != "" {
 			networkAnnotations = buildBridgeNetworkAnnotations(s.BridgeNetwork, s.BridgeNamespace)
 		} else if s.Cudn {
-			networkAnnotations = buildCUdnNetworkAnnotations(CudnName)
+			networkAnnotations = buildCUdnNetworkAnnotations(s.CudnNetworkName, s.CudnNetworkNamespace)
 		} else if s.SriovNetwork != "" {
 			networkAnnotations = buildSriovNetworkAnnotations()
 		} else if s.MacvlanNetwork != "" {
@@ -909,7 +938,7 @@ func BuildSUT(client *kubernetes.Clientset, s *config.PerfScenarios) error {
 	if s.BridgeNetwork != "" {
 		networkAnnotations = buildBridgeNetworkAnnotations(s.BridgeNetwork, s.BridgeNamespace)
 	} else if s.Cudn {
-		networkAnnotations = buildCUdnNetworkAnnotations(CudnName)
+		networkAnnotations = buildCUdnNetworkAnnotations(s.CudnNetworkName, s.CudnNetworkNamespace)
 	} else if s.SriovNetwork != "" {
 		networkAnnotations = buildSriovNetworkAnnotations()
 	} else if s.MacvlanNetwork != "" {
@@ -1277,6 +1306,11 @@ func ExtractSriovIp(pod corev1.Pod) (string, error) {
 
 // Extract the UDN Ip address of the server (or the client) from the annotations - Support only ipv4
 func ExtractUdnIp(pod corev1.Pod, networkName string) (string, error) {
+	return ExtractUdnIpWithNamespace(pod, networkName, namespace)
+}
+
+// ExtractUdnIpWithNamespace extracts the UDN IP address with a configurable namespace
+func ExtractUdnIpWithNamespace(pod corev1.Pod, networkName string, networkNamespace string) (string, error) {
 	for key, value := range pod.Annotations {
 		log.Debugf("Pod Annotation key: %s, value: %s", key, value)
 	}
@@ -1288,10 +1322,12 @@ func ExtractUdnIp(pod corev1.Pod, networkName string) (string, error) {
 		return "", err
 	}
 	//
+	networkKey := networkNamespace + "/" + networkName
+	log.Debugf("Looking for network key: %s", networkKey)
 	var udnData PodNetworksData
-	err = json.Unmarshal(root[namespace+"/"+networkName], &udnData)
+	err = json.Unmarshal(root[networkKey], &udnData)
 	if err != nil {
-		log.Error("UDN pod annotations does not match PodNetworksData structure:", err)
+		log.Errorf("UDN pod annotations does not match PodNetworksData structure for key '%s': %v", networkKey, err)
 		return "", err
 	}
 	// Extract the IPv4 address
@@ -1312,7 +1348,7 @@ func ExtractUdnIp(pod corev1.Pod, networkName string) (string, error) {
 // launchServerVM will create the ServerVM with the specific node and pod affinity.
 func launchServerVM(perf *config.PerfScenarios, name string, podAff *corev1.PodAntiAffinity, nodeAff *corev1.NodeAffinity) error {
 	_, err := CreateVMServer(perf.KClient, name, name, *podAff, *nodeAff, perf.VMImage, perf.BridgeServerNetwork, perf.Udn, perf.UdnPluginBinding, perf.Cudn,
-		perf.SriovNetwork, perf.Sockets, perf.Cores, perf.Threads)
+		perf.CudnNetworkName, perf.CudnNetworkNamespace, perf.SriovNetwork, perf.Sockets, perf.Cores, perf.Threads)
 	if err != nil {
 		return err
 	}
@@ -1340,7 +1376,7 @@ func launchServerVM(perf *config.PerfScenarios, name string, podAff *corev1.PodA
 // launchClientVM will create the ClientVM with the specific node and pod affinity.
 func launchClientVM(perf *config.PerfScenarios, name string, podAff *corev1.PodAntiAffinity, nodeAff *corev1.NodeAffinity) error {
 	host, err := CreateVMClient(perf.KClient, perf.ClientSet, perf.DClient, name, podAff, nodeAff, perf.VMImage, perf.BridgeClientNetwork, perf.Udn, perf.UdnPluginBinding, perf.Cudn,
-		perf.SriovNetwork, perf.Sockets, perf.Cores, perf.Threads)
+		perf.CudnNetworkName, perf.CudnNetworkNamespace, perf.SriovNetwork, perf.Sockets, perf.Cores, perf.Threads)
 	if err != nil {
 		return err
 	}

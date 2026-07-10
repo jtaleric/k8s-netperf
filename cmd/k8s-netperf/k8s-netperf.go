@@ -46,8 +46,10 @@ var (
 	ibWriteBw         string
 	udnl2             bool
 	udnl3             bool
-	cudn              string
-	udnPluginBinding  string
+	cudn                  string
+	cudnLocalnet          string
+	cudnLocalnetNamespace string
+	udnPluginBinding      string
 	acrossAZ          bool
 	full              bool
 	hostNetOnly       bool
@@ -111,11 +113,17 @@ var rootCmd = &cobra.Command{
 		if cudn != "" && (udnl2 || udnl3) {
 			log.Fatal("flags --cudn and --udnl2/--udnl3 are mutually exclusive; please set only one")
 		}
+		if cudnLocalnet != "" && cudn != "" {
+			log.Fatal("flags --cudn and --cudn-localnet are mutually exclusive; please set only one")
+		}
+		if cudnLocalnet != "" && (udnl2 || udnl3) {
+			log.Fatal("flags --cudn-localnet and --udnl2/--udnl3 are mutually exclusive; please set only one")
+		}
 		if ibWriteBwEnabled && (!privileged || !hostNetOnly) {
 			log.Fatalf("😭 ib_write_bw driver requires both --privileged and --hostNet flags")
 		}
-		if ibWriteBwEnabled && (udnl2 || udnl3 || cudn != "") {
-			log.Fatalf("😭 ib_write_bw driver cannot be used with UDN flags (--udnl2, --udnl3, --cudn)")
+		if ibWriteBwEnabled && (udnl2 || udnl3 || cudn != "" || cudnLocalnet != "") {
+			log.Fatalf("😭 ib_write_bw driver cannot be used with UDN flags (--udnl2, --udnl3, --cudn, --cudn-localnet)")
 		}
 		if ibWriteBwEnabled && vm {
 			log.Fatalf("😭 ib_write_bw driver cannot be used with --vm flag")
@@ -129,8 +137,8 @@ var rootCmd = &cobra.Command{
 		if sriov != "" && ibWriteBwEnabled {
 			log.Fatalf("😭 --sriov and --ib-write-bw are mutually exclusive")
 		}
-		if sriov != "" && (udnl2 || udnl3 || cudn != "") {
-			log.Fatalf("😭 --sriov cannot be used with UDN flags (--udnl2, --udnl3, --cudn)")
+		if sriov != "" && (udnl2 || udnl3 || cudn != "" || cudnLocalnet != "") {
+			log.Fatalf("😭 --sriov cannot be used with UDN flags (--udnl2, --udnl3, --cudn, --cudn-localnet)")
 		}
 		if sriov != "" && hostNetOnly {
 			log.Fatalf("😭 --sriov cannot be used with --hostNet")
@@ -147,8 +155,8 @@ var rootCmd = &cobra.Command{
 		if macvlan != "" && ibWriteBwEnabled {
 			log.Fatalf("😭 --macvlan and --ib-write-bw are mutually exclusive")
 		}
-		if macvlan != "" && (udnl2 || udnl3 || cudn != "") {
-			log.Fatalf("😭 --macvlan cannot be used with UDN flags (--udnl2, --udnl3, --cudn)")
+		if macvlan != "" && (udnl2 || udnl3 || cudn != "" || cudnLocalnet != "") {
+			log.Fatalf("😭 --macvlan cannot be used with UDN flags (--udnl2, --udnl3, --cudn, --cudn-localnet)")
 		}
 		if macvlan != "" && hostNetOnly {
 			log.Fatalf("😭 --macvlan cannot be used with --hostNet")
@@ -228,23 +236,25 @@ var rootCmd = &cobra.Command{
 			cleanup(client, rconfig)
 		}
 		s := config.PerfScenarios{
-			HostNetwork:     full || hostNetOnly,
-			HostNetworkOnly: hostNetOnly,
-			NodeLocal:       nl,
-			AcrossAZ:        acrossAZ,
-			RestConfig:      *rconfig,
-			Configs:         cfg,
-			ClientSet:       client,
-			BridgeNetwork:   bridge,
-			BridgeNamespace: bridgeNamespace,
-			SriovNetwork:    sriov,
-			MacvlanNetwork:  macvlan,
-			Cudn:            cudn != "",
-			IbWriteBwParams: ibWriteBw,
-			Sockets:         sockets,
-			Cores:           cores,
-			Threads:         threads,
-			Privileged:      privileged,
+			HostNetwork:          full || hostNetOnly,
+			HostNetworkOnly:      hostNetOnly,
+			NodeLocal:            nl,
+			AcrossAZ:             acrossAZ,
+			RestConfig:           *rconfig,
+			Configs:              cfg,
+			ClientSet:            client,
+			BridgeNetwork:        bridge,
+			BridgeNamespace:      bridgeNamespace,
+			SriovNetwork:         sriov,
+			MacvlanNetwork:       macvlan,
+			Cudn:                 cudn != "" || cudnLocalnet != "",
+			CudnNetworkName:      "",
+			CudnNetworkNamespace: "",
+			IbWriteBwParams:      ibWriteBw,
+			Sockets:              sockets,
+			Cores:                cores,
+			Threads:              threads,
+			Privileged:           privileged,
 		}
 		if serverIPAddr != "" {
 			s.ExternalServer = true
@@ -314,6 +324,23 @@ var rootCmd = &cobra.Command{
 			err = k8s.DeployCUDN(dynClient, cudn)
 			if err != nil {
 				log.Error(err)
+				os.Exit(1)
+			}
+			s.CudnNetworkName = k8s.CudnName
+			s.CudnNetworkNamespace = "netperf"
+		} else if cudnLocalnet != "" {
+			s.Cudn = true
+			s.CudnNetworkName = cudnLocalnet
+			s.CudnNetworkNamespace = cudnLocalnetNamespace
+			log.Infof("🌐 Using C-UDN Localnet: %s/%s", cudnLocalnetNamespace, cudnLocalnet)
+			dynClient, err := dynamic.NewForConfig(rconfig)
+			if err != nil {
+				log.Error(err)
+				os.Exit(1)
+			}
+			err = k8s.ValidateCudnNetwork(client, dynClient, cudnLocalnet, cudnLocalnetNamespace)
+			if err != nil {
+				log.Errorf("Failed to validate C-UDN Localnet network: %v", err)
 				os.Exit(1)
 			}
 		}
@@ -674,6 +701,7 @@ func cleanup(client *kubernetes.Clientset, rconfig *rest.Config) {
 			log.Error(err)
 		}
 	}
+	// Skip cleanup for cudnLocalnet since we didn't create it
 	if sriov != "" {
 		dynClient, err := dynamic.NewForConfig(rconfig)
 		if err != nil {
@@ -781,11 +809,16 @@ func executeWorkload(nc config.Config,
 			npr.UdnInfo = npr.UdnInfo + " - " + s.UdnPluginBinding
 		}
 	} else if s.Cudn {
-		serverIP, err = k8s.ExtractUdnIp(s.Server.Items[0], k8s.CudnName)
+		log.Debugf("Extracting C-UDN IP from network: %s/%s", s.CudnNetworkNamespace, s.CudnNetworkName)
+		serverIP, err = k8s.ExtractUdnIpWithNamespace(s.Server.Items[0], s.CudnNetworkName, s.CudnNetworkNamespace)
 		if err != nil {
 			log.Fatal(err)
 		}
-		npr.UdnInfo = "Cudn -" + cudn
+		if cudn != "" {
+			npr.UdnInfo = "Cudn - " + cudn
+		} else {
+			npr.UdnInfo = "Cudn Localnet - " + s.CudnNetworkNamespace + "/" + s.CudnNetworkName
+		}
 	} else if s.SriovNetwork != "" {
 		if virt {
 			serverIP, err = k8s.ExtractSriovIp(s.VMServer.Items[0])
@@ -936,6 +969,8 @@ func main() {
 	rootCmd.Flags().BoolVar(&udnl2, "udnl2", false, "Create and use a layer2 UDN as a primary network (default false)")
 	rootCmd.Flags().BoolVar(&udnl3, "udnl3", false, "Create and use a layer3 UDN as a primary network (default false)")
 	rootCmd.Flags().StringVar(&cudn, "cudn", "", "Create and use a Cluster UDN that would be used as a secondary network")
+	rootCmd.Flags().StringVar(&cudnLocalnet, "cudn-localnet", "", "Use an existing Localnet Cluster UDN as a secondary network (network name)")
+	rootCmd.Flags().StringVar(&cudnLocalnetNamespace, "cudn-localnet-namespace", "default", "Namespace of the existing Localnet Cluster UDN (default default)")
 	rootCmd.MarkFlagsMutuallyExclusive("all", "hostNet")
 	rootCmd.Flags().StringVar(&udnPluginBinding, "udnPluginBinding", "passt", "UDN with VMs only - the binding method of the UDN interface, select 'passt' or 'l2bridge' (default passt)")
 	rootCmd.Flags().StringVar(&bridge, "bridge", "", "Name of the NetworkAttachmentDefinition to be used for bridge interface")

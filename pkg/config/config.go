@@ -52,11 +52,13 @@ type PerfScenarios struct {
 	VMHost              string
 	VMName              string
 	UseVirtctl          bool
-	Udn                 bool
-	Cudn                bool
-	UdnPluginBinding    string
-	BridgeNetwork       string
-	BridgeNamespace     string
+	Udn                   bool
+	Cudn                  bool
+	CudnNetworkName       string
+	CudnNetworkNamespace  string
+	UdnPluginBinding      string
+	BridgeNetwork         string
+	BridgeNamespace       string
 	BridgeServerNetwork string
 	BridgeClientNetwork string
 	SriovNetwork        string

@@ -60,7 +60,7 @@ func (i *iperf3) Run(c *kubernetes.Clientset,
 			clientIp = udnIp
 		}
 	} else if perf.Cudn {
-		if udnIp, _ := k8s.ExtractUdnIp(pod, k8s.CudnName); udnIp != "" {
+		if udnIp, _ := k8s.ExtractUdnIpWithNamespace(pod, perf.CudnNetworkName, perf.CudnNetworkNamespace); udnIp != "" {
 			clientIp = udnIp
 		}
 	} else if perf.BridgeNetwork != "" {

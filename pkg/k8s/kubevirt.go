@@ -162,7 +162,7 @@ func exposeService(client *kubernetes.Clientset, dynamicClient *dynamic.DynamicC
 // CreateVMClient takes in the affinity rules and deploys the VMI
 func CreateVMClient(kclient *kubevirtv1.KubevirtV1Client, client *kubernetes.Clientset,
 	dyn *dynamic.DynamicClient, name string, podAff *corev1.PodAntiAffinity, nodeAff *corev1.NodeAffinity, vmimage string, bridgeNetwork string, udn bool, udnPluginBinding string,
-	cudn bool, sriovNetwork string, sockets uint32, cores uint32, threads uint32) (string, error) {
+	cudn bool, cudnNetworkName string, cudnNetworkNamespace string, sriovNetwork string, sockets uint32, cores uint32, threads uint32) (string, error) {
 	label := map[string]string{
 		"app":  name,
 		"role": name,
@@ -272,7 +272,7 @@ ethernets:
 			Name: "secondary",
 			NetworkSource: v1.NetworkSource{
 				Multus: &v1.MultusNetwork{
-					NetworkName: namespace + "/" + CudnName,
+					NetworkName: cudnNetworkNamespace + "/" + cudnNetworkName,
 				},
 			},
 		})
@@ -318,7 +318,7 @@ ethernets:
 // CreateVMServer will take the pod and node affinity and deploy the VMI
 func CreateVMServer(client *kubevirtv1.KubevirtV1Client, name string, role string, podAff corev1.PodAntiAffinity,
 	nodeAff corev1.NodeAffinity, vmimage string, bridgeNetwork string, udn bool, udnPluginBinding string, cudn bool,
-	sriovNetwork string, sockets uint32, cores uint32, threads uint32) (*v1.VirtualMachineInstance, error) {
+	cudnNetworkName string, cudnNetworkNamespace string, sriovNetwork string, sockets uint32, cores uint32, threads uint32) (*v1.VirtualMachineInstance, error) {
 	label := map[string]string{
 		"app":  name,
 		"role": role,
@@ -429,7 +429,7 @@ ethernets:
 			Name: "secondary",
 			NetworkSource: v1.NetworkSource{
 				Multus: &v1.MultusNetwork{
-					NetworkName: namespace + "/" + CudnName,
+					NetworkName: cudnNetworkNamespace + "/" + cudnNetworkName,
 				},
 			},
 		})
